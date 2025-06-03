@@ -31,7 +31,8 @@ However, access may be granted upon reasonable request to:
 This project aims to develop and evaluate machine learning models for improving the risk stratification of patients presenting with dizziness in the ED. The ultimate goal is to support more accurate diagnosis and reduce unnecessary imaging or consultations.
 
 ## 📜 License
-MIT License (or another open-source license, if preferred).
+This project is licensed under the [MIT License](LICENSE).  
+You are free to use, modify, and distribute this work with proper attribution.
 
 ## 📬 Contact
 For questions or collaboration inquiries, please contact:
