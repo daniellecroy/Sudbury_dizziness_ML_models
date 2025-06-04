@@ -1,17 +1,17 @@
 ---
-title: "Machine Learning Ohle Risk Score"
+title: "Machine Learning Dizziness Models"
 output: html_document
-date: "2024-06-05"
+date: "2025-06-04"
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
 ```
 
 
-```{r}
+```{r, results="hide"}
 #Load Packages
-Packages <- c("readxl", "tree", "dplyr", "rpart", "MLmetrics", "caret", "xgboost", "rBayesianOptimization", "mltools", "data.table", "randomForest", "performanceEstimation", "ROSE", "gbm", "caret", "glmnet", "epiR")
+Packages <- c("readxl", "tree", "dplyr", "rpart", "MLmetrics", "caret", "xgboost", "rBayesianOptimization", "mltools", "data.table", "randomForest", "performanceEstimation", "ROSE", "gbm", "caret", "glmnet", "epiR", "table1", "pROC", "ROCR")
 lapply(Packages, library, character.only=TRUE)
 
 #Import data
@@ -19,7 +19,7 @@ train<-suppressMessages(read_xlsx(path="~/Library/Mobile Documents/com~apple~Clo
 test<-suppressMessages(read_xlsx(path="~/Library/Mobile Documents/com~apple~CloudDocs/Research/HSNRI - Research/Ohle - BPPV/Stroke Risk Score/Ohlescorevalidation_June2024.xlsx", sheet=1))
 ```
 
-#Data Cleaning
+**Data Cleaning**
 ```{r}
 #Data Cleaning
 #Change outcome to factor variable
@@ -55,14 +55,14 @@ test_60<-subset(test_60_, select=-c(trigger_head_turning, trigger_getting_up, tr
 ```
 
 
-#Descriptive statistics
+**Descriptive statistics**
 ```{r}
 #Get a full clean unbalanced dataset (merging both train and test sets)
 train_full2<-train_full
 train_full2$dev_val<-"Train"
 test_60_2<-test_60
 test_60_2$dev_val<-"Test"
-full_dizzy<-full_join(train_ful2,test_60_2)
+full_dizzy<-full_join(train_full2,test_60_2)
 
 full_dizzy2<-subset(full_dizzy, select=c(patient_ID, bppv, single, multiple, dysphagia, diplopia, diabetes, atrial_fibrillation, previous_stroke, motor, objective_sensory, ataxia, dysarthria, dysmetria, age, sexe, pre_tia2, hypert, outcome, dev_val))
 full_dizzy2$age2<-as.numeric(as.character(full_dizzy2$age))
@@ -118,18 +118,16 @@ my.render.cat <- function(x) {
 
 table1<-(table1(~ age2+sexe+hypert+diabetes+atrial_fibrillation+previous_stroke+pre_tia2+bppv+single+multiple+diplopia+dysphagia+dysmetria+dysarthria+ataxia+motor+objective_sensory | outcome, data=full_dizzy2, render.categorical=my.render.cat, c(left="Overall")))
 table1
-write_lines(table1, "vertigo_ML_table1.html", append=F)
+readr::write_lines(table1, "vertigo_ML_table1.html", append=F)
 
 table2<-(table1(~ age2+sexe+hypert+diabetes+atrial_fibrillation+previous_stroke+pre_tia2+bppv+single+multiple+diplopia+dysphagia+dysmetria+dysarthria+ataxia+motor+objective_sensory | dev_val, data=full_dizzy2, render.categorical=my.render.cat, c(left="Overall")))
 table2
-write_lines(table2, "vertigo_ML_table2.html", append=F)
+readr::write_lines(table2, "vertigo_ML_table2.html", append=F)
 ```
 
-#Balancing Data
+**Balancing Data**
 ```{r}
 set.seed(360)
-table(train_full$outcome)
-
 #Apply over- and under-sampling
 df_train <- 
   ovun.sample(outcome ~. -diage -patient_ID -any_neuro_deficits, data=train_full, p=0.5, seed=360, method="both")$data
@@ -137,7 +135,7 @@ df_train <-
 
 
 
-#Random Forest
+**Random Forest**
 ```{r}
 #RANDOM FOREST MODEL
 set.seed(1200)
@@ -147,48 +145,35 @@ train_control<-trainControl(method="cv",number=5,search="grid")
 
 tune_grid <- expand.grid(.mtry=c(3,4,5))
 
+set.seed(1200)
 rf_model<-train(outcome ~. -diage -patient_ID -any_neuro_deficits, data=df_train, method="rf", trControl=train_control, tuneGrid=tune_grid)
-print(rf_model) 
-#mtry=5 produced best result
+print(rf_model) #mtry=5 produced best result
 
-#Build RF model
+#Build dataframes for analyses
 df_train_temp<-df_train
 df_train_temp$age<-as.numeric(as.character(df_train$age))
 df_predictors_train<-subset(df_train_temp, select=-c(diage, patient_ID, any_neuro_deficits))
-
-#Confirm best vcalue of mtry
-df_predictors_train<-as.data.frame(df_predictors_train)
-df_predictors_train$outcome<-as.factor(df_predictors_train$outcome)
-bestmtry<-tuneRF(df_predictors_train[,-18], df_predictors_train[,18], stepFactor=0.7, improve=1e-5, ntree=500, mtryStart=5)
-print(bestmtry)
+test_60$age<-as.numeric(as.character(test_60$age))
 
 #Train RF model
 rf_riskscore<-randomForest(outcome~. , data=df_predictors_train, importance=TRUE, ntree=100, keep.inbag=TRUE, mtry=5, cutoff=c(0.95,0.05))
 importance_rf<-importance(rf_riskscore)
 saveRDS(rf_riskscore, "RF_SeriousDiagnosis_Model.rds")
 
-#Get predicted probabilities from training data
-prob_train<-predict(rf_riskscore, newdata=df_predictors_train, type="prob")
-predicted_class<-ifelse(prob_train[,"yes"]>0.20, "yes", "no")
-confusionMatrix(as.factor(predicted_class), as.factor(df_predictors_train$outcome), positive="yes")
-
 #Apply predictions to the test data
 p2<-predict(rf_riskscore,newdata=test_60, type="prob")
 predicted_class<-ifelse(p2[,"yes"]>0.20, "yes", "no")
 confusionMatrix(as.factor(predicted_class), as.factor(test_60$outcome), positive="yes")
-rf_data<-as.table(matrix(c(30,166,0,1172), nrow=2, byrow=T))
+rf_data<-as.table(matrix(c(30,187,0,1151), nrow=2, byrow=T))
 epi.tests(rf_data, conf.level=0.95)
 
 #Assess resource utilization
-table(test_60_$ct_performed)
 table(as.factor(predicted_class))
 table(as.factor(test_60_$ct_performed))
 table(as.factor(test_60_$referred))
 
 
 #Get variable importance and MDA
-varImpPlot(rf_riskscore, type=1)
-
 importance_df <- as.data.frame(importance(rf_riskscore, type = 1))  # type = 1 is MDA
 importance_df$Variable <- rownames(importance_df)
 name_map <- c(
@@ -243,7 +228,7 @@ p_full1<-predict(rf_riskscore, newdata=combined_df, type="prob")
 predict_full<-ifelse(p_full1[,"yes"]>0.20, "yes", "no")
 confusionMatrix(as.factor(predict_full), as.factor(combined_df$outcome), positive="yes")
 
-rf_full_data<-as.table(matrix(c(215,734,2,5688), nrow=2, byrow=T))
+rf_full_data<-as.table(matrix(c(215,755,2,5667), nrow=2, byrow=T))
 epi.tests(rf_full_data, conf.level=0.95)
 
 train_full_$age<-as.numeric(as.character(train_full_$age))
@@ -253,10 +238,9 @@ table(as.factor(resource_full$ct_performed))
 table(as.factor(resource_full$referred))
 ```
 
-#XGBoost Model
-```{r}
+**XGBoost Model**
+```{r, warning=FALSE}
 ##Need to hot one-encode the training data for xgboost model
-summary(df_train)
 df_train_xgb<-df_train
 df_train_xgb$bppv<-ifelse(df_train$bppv=="yes",1,0)
 df_train_xgb$single<-ifelse(df_train$single=="yes",1,0)
@@ -323,10 +307,21 @@ tune_grid2<-expand.grid(
 )
 
 #Train the model with hyperparameter tuning
-set.seed(746)
-xgb_model<-train(x=as.matrix(df_train_xgb2), y=as.factor(df_train_xgb$outcome_xgb), method="xgbTree", trControl=train_control2, tuneGrid=tune_grid2, metric="Accuracy")
-print(xgb_model)
+set.seed(700) #746
+capture.output({
+  suppressWarnings({
+    xgb_model <- train(
+      x = as.matrix(df_train_xgb2),
+      y = as.factor(df_train_xgb$outcome_xgb),
+      method = "xgbTree",
+      trControl = train_control2,
+      tuneGrid = tune_grid2,
+      metric = "Accuracy"
+    )
+  })
+}, file = ifelse(.Platform$OS.type == "windows", "NUL", "/dev/null"))
 
+#Train model with optimal hyperparameters
 bst <- xgboost(data= xgbmatrix, max.depth= 5, eta= 0.1, nrounds= 100, gamma=2, colsample_bytree=0.8, min_child_weight=1, subsample=0.8, objective= "binary:logistic", verbose = 1)
 
 #Convert the testing dataframes into a matrices
@@ -340,7 +335,7 @@ xgbmatrix_test <-xgb.DMatrix(data=dt_test, label=df_test_xgb$outcome_xgb)
 p1<-predict(bst,xgbmatrix_test, type="prob")
 pred <- ifelse(p1>0.20, 1, 0)
 confusionMatrix(as.factor(pred), as.factor(df_test_xgb$outcome_xgb), positive="1")
-gb_data<-as.table(matrix(c(28,145,2,1193), nrow=2, byrow=T))
+gb_data<-as.table(matrix(c(29,174,1,1164), nrow=2, byrow=T))
 epi.tests(gb_data, conf.level=0.95)
 
 #Assess resource utilization
@@ -409,7 +404,6 @@ df_full_xgb$pre_tia2<-ifelse(df_full_xgb$pre_tia2=="y",1,0)
 df_full_xgb$hypert<-as.numeric(df_full_xgb$hypert)-1
 df_full_xgb$previous_stroke<-ifelse(df_full_xgb$previous_stroke=="yes",1,0)
 df_full_xgb$outcome_xgb<-ifelse(df_full_xgb$outcome=="yes",1,0)
-summary(df_full_xgb)
 
 df_full_xgb2 <- subset(df_full_xgb, select=-c(outcome_xgb, outcome, sexe))
 colnames(df_full_xgb2)<-c("BPPV", "Single episode", "Multiple episodes", "Dysphagia", "Diplopia", "Diabetes", "Atrial fibrillation", "Previous stroke", "Motor deficits", "Objective sensory deficits", "Ataxia", "Dysarthria", "Dysmetria", "Age", "Previous TIA", "Hypertension", "Sex")
@@ -419,7 +413,7 @@ xgbmatrix_full <-xgb.DMatrix(data=dt_full, label=df_full_xgb$outcome_xgb)
 pfull<-predict(bst,xgbmatrix_full, type="prob")
 pred_xgb_full <- ifelse(pfull>0.20, 1, 0)
 confusionMatrix(as.factor(pred_xgb_full), as.factor(df_full_xgb$outcome_xgb), positive="1")
-gb_full_data<-as.table(matrix(c(213,752,2,5670), nrow=2, byrow=T))
+gb_full_data<-as.table(matrix(c(214,795,1,5627), nrow=2, byrow=T))
 epi.tests(gb_full_data, conf.level=0.95)
 table(as.factor(pred_xgb_full))
 table(as.factor(resource_full$ct_performed))
@@ -427,7 +421,7 @@ table(as.factor(resource_full$referred))
 ```
 
 
-#LASSO Model
+**LASSO Model**
 ```{r}
 #Find best lambda value for LASSO Logistic regression model
 lasso_grid<-expand.grid(alpha=1, lambda=seq(0.01,0.1,length.out=10))
@@ -441,7 +435,7 @@ lasso_model_final<-glmnet(x=as.matrix(dt), y=df_train_xgb$outcome_xgb, alpha=1, 
 y_pred<-predict(lasso_model_final, newx=dt_test, type="response")
 y_pred2 <- ifelse(y_pred>0.20, 1, 0)
 confusionMatrix(as.factor(y_pred2), as.factor(df_test_xgb$outcome_xgb), positive="1")
-lasso_data<-as.table(matrix(c(30,301,0,1037), nrow=2, byrow=T))
+lasso_data<-as.table(matrix(c(30,346,0,992), nrow=2, byrow=T))
 lasso_data
 
 #Assess resource utilization
@@ -454,7 +448,7 @@ table(as.factor(test_60_$referred))
 y_full_pred<-predict(lasso_model_final, newx=dt_full, type="response")
 y_pred_full <- ifelse(y_full_pred>0.20, 1, 0)
 confusionMatrix(as.factor(y_pred_full), as.factor(df_full_xgb$outcome_xgb), positive="1")
-lasso_full_data<-as.table(matrix(c(214,1486,1,4936), nrow=2, byrow=T))
+lasso_full_data<-as.table(matrix(c(214,1531,1,4891), nrow=2, byrow=T))
 lasso_full_data
 epi.tests(lasso_full_data, conf.level=0.95)
 table(as.factor(y_pred_full))
@@ -462,7 +456,7 @@ table(as.factor(resource_full$ct_performed))
 table(as.factor(resource_full$referred))
 ```
 
-#Tree model
+**Decision tree model**
 ```{r}
 set.seed(234)
 
@@ -510,11 +504,6 @@ tree_model<-train(outcome~BPPV+Single_episode+Multiple_episode+Dysphagia+Diplopi
 print(tree_model$bestTune)
 plot(tree_model)
 
-#View decision tree
-library(rpart.plot)
-tree_final<-tree_model$finalModel
-rpart.plot(tree_final, type=3, extra=102, fallen.leaves = T)
-
 #Repeat same reformatting for test data
 predictors_test<-as.data.frame(dt_test)
 predictors_test$BPPV<-as.factor(predictors_test$BPPV)
@@ -560,6 +549,8 @@ tree_data<-as.table(matrix(c(29,210,1,1128), nrow=2, byrow=T))
 epi.tests(tree_data, conf.level=0.95)
 
 #Plot decision tree
+library(rpart.plot)
+tree_final<-tree_model$finalModel
 custom_labels<-c(BPPV = "BPPV",
   Single_episode = "Single Episode",
   Multiple_episode = "Multiple Episodes",
@@ -646,15 +637,15 @@ table(as.factor(resource_full$ct_performed))
 table(as.factor(resource_full$referred))
 ```
 
-#CT/Referrals
+**CT/Referrals**
 ```{r}
 #Input number of CTs and referrals to. calculate 95% CIs
 number_cts_or_refs=503
-number_using_preds=176
+number_using_preds=239
 prop.test(x = number_cts_or_refs-number_using_preds, n = number_cts_or_refs, correct = FALSE)
 ```
 
-#Risk score
+**Sudbury Vertigo Risk Score**
 ```{r}
 #Calculate Sudbury Vertigo Risk Score
 test_score<-test_60
@@ -666,7 +657,6 @@ test_score$temp4<-ifelse(test_score$motor=="yes"| test_score$objective_sensory==
 test_score$temp5<-ifelse(test_score$ataxia=="yes"| test_score$diplopia=="yes"| test_score$dysarthria=="yes"| test_score$dysphagia=="yes"| test_score$dysmetria=="yes", 6, 0)
 test_score$temp6<-ifelse(test_score$bppv=="yes",-5,0)
 test_score$sudburyscore<-test_score$temp1+test_score$temp2+test_score$temp3+test_score$temp4+test_score$temp5+test_score$temp6
-test_score$sudburyscore
 
 #Dichotomize score
 test_score$sudburyscore_over4<-ifelse(test_score$sudburyscore>4,1,0)
@@ -684,11 +674,7 @@ table(test_60_$referred)
 
 #Calculate prediction for AUC curve
 riskscore_model1<-glm(outcome2~sudburyscore, data=test_score, family=binomial)
-summary(riskscore_model1)
 prob=predict(riskscore_model1, type=c("response"))
-predi<-prediction(prob, test_score$outcome2)
-perf<-performance(predi, measure="tpr", x.measure="fpr")
-plot(perf)
 
 #Check 2x2 accuracy and resource utilization in full dataset
 train_full$age<-as.numeric(as.character(train_full$age))
@@ -702,7 +688,6 @@ full_score$temp4<-ifelse(full_score$motor=="yes" | full_score$objective_sensory=
 full_score$temp5<-ifelse(full_score$ataxia=="yes" | full_score$diplopia=="yes" | full_score$dysarthria=="yes" | full_score$dysphagia=="yes" | full_score$dysmetria=="yes", 6, 0)
 full_score$temp6<-ifelse(full_score$bppv=="yes",-5,0)
 full_score$sudburyscore<-full_score$temp1+full_score$temp2+full_score$temp3+full_score$temp4+full_score$temp5+full_score$temp6
-full_score$sudburyscore
 
 full_score$sudburyscore_over4<-ifelse(full_score$sudburyscore>4,1,0)
 full_score$sudburyscore_over8<-ifelse(full_score$sudburyscore>8,1,0)
@@ -714,7 +699,7 @@ epi.tests(score_data_full, conf.level=0.95)
 table(as.factor(full_score$sudburyscore_over4))
 ```
 
-#ROC Curve
+**ROC Curves**
 ```{r}
 #Get predicted probabilities for all the models
 tree_pred<-tree_prob_class1
@@ -725,7 +710,6 @@ riskscore_pred=predict(riskscore_model1, type=c("response"))
 
 #Create outcome variable in environment
 outcome<-ifelse(test_60$outcome=="yes",1,0)
-outcome
 
 #Calculate AUC and 95% CIs
 library(pROC)
@@ -803,7 +787,7 @@ roc_df$Model <- factor(roc_df$Model, levels = c(
 ggplot(roc_df, aes(x=(1-Specificity), y=Sensitivity, color=Model)) +geom_line() +labs(title="ROC Curves Comparing Different Models", x="1 - Specificity", y="Sensitivity") + theme_minimal()+ coord_fixed(ratio=1)
 ```
 
-#Brier Score
+**Brier Scores**
 ```{r}
 #Calculate Brier score and 95% CI
 ##Decision tree
@@ -841,8 +825,8 @@ riskscore_brierscore
 brier$lower
 brier$upper
 ```
-#Calibration
-```{r}
+
+```{r, include=F}
 ############################ Calibration plot #################################
 calibration_data1<-data.frame(observed=outcome, predicted=tree_pred, Model="Decision Tree")
 calibration_data3<-data.frame(observed=outcome, predicted=lasso_pred, Model="Logistic Regression with LASSO")
@@ -896,7 +880,7 @@ ggplot(data = calibration_binned, aes(x = mean_predicted, y = mean_observed, col
 ```
 
 
-#Importance Plots
+**Importance Plots**
 ```{r, fig.width=12, fig.height=5}
 #MDA plots in one plot
 library(patchwork)
