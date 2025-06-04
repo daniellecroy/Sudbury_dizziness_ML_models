@@ -4,10 +4,11 @@ This repository contains the R Markdown file used to clean data, train machine l
 
 ## 📁 Files
 
-- `Sudbury_ML_Riskscores_final.Rmd` – Full analysis pipeline
+- `Sudbury_ML_Dizziness_models_final.Rmd` – Full analysis pipeline
   - Data cleaning and preprocessing
   - Model training (e.g., XGBoost, random forest, LASSO logistic regression)
   - Generation of plots and performance tables
+- `Sudbury_ML_Dizziness_models_final.html` – Rendered output of the R Markdown file, viewable in a web browser
 
 > Figures and tables are generated in the RMarkdown file, but not saved as separate output files.
 
@@ -21,7 +22,7 @@ However, access may be granted upon reasonable request to:
 ## 🔁 How to Reproduce
 
 1. Download or clone the repository.
-2. Open `Sudbury_ML_Riskscores_final.Rmd` in RStudio.
+2. Open `Sudbury_ML_Dizziness_models_final.Rmd` in RStudio.
 3. Install the required packages: 
     install.packages(c("tidyverse", "xgboost", "caret", "randomForest", "pROC"))
 4. Add the dataset (if granted access) to the appropriate path used in the .Rmd.
