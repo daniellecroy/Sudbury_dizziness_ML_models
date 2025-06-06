@@ -1,4 +1,6 @@
 # Machine Learning Models for Serious Outcome Risk Stratification in ED patients with dizziness or vertigo
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15609465.svg)](https://doi.org/10.5281/zenodo.15609465)
  
 This repository contains the R Markdown file used to clean data, train machine learning models, and generate plots and tables related to serious diagnoses among emergency department (ED) patients presenting with dizziness.
 
