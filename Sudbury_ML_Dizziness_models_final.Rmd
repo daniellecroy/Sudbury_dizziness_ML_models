@@ -886,3 +886,508 @@ ggplot(data = calibration_binned, aes(x = mean_predicted, y = mean_observed, col
 library(patchwork)
 plot1+plot2
 ```
+
+**Recalibration**
+```{r}
+# ============================================================
+# POST-HOC PLATT RECALIBRATION
+# Fitted on original unbalanced training data predictions
+# Applied to held-out test set
+# ============================================================
+
+library(dplyr)
+library(caret)
+library(pROC)
+library(DescTools)
+
+# Helper function: avoid infinite logits
+clip_probs <- function(p) {
+  pmin(pmax(as.numeric(p), 1e-6), 1 - 1e-6)
+}
+
+# Helper function: fit Platt model and apply to test probabilities
+platt_recalibrate <- function(train_probs, train_obs, test_probs, test_obs, model_name) {
+  
+  train_cal <- data.frame(
+    observed = as.numeric(train_obs),
+    predicted = clip_probs(train_probs)
+  )
+  
+  train_cal$logit_pred <- qlogis(train_cal$predicted)
+  
+  platt_model <- glm(
+    observed ~ logit_pred,
+    data = train_cal,
+    family = binomial
+  )
+  
+  test_cal <- data.frame(
+    observed = as.numeric(test_obs),
+    predicted_original = clip_probs(test_probs),
+    Model = model_name
+  )
+  
+  test_cal$logit_pred <- qlogis(test_cal$predicted_original)
+  
+  test_cal$predicted_recalibrated <- predict(
+    platt_model,
+    newdata = test_cal,
+    type = "response"
+  )
+  
+  return(list(
+    platt_model = platt_model,
+    test_data = test_cal
+  ))
+}
+
+# ============================================================
+# 1. Get original unbalanced training data in model-ready format
+# ============================================================
+
+# Random forest training data
+rf_train_unbalanced <- subset(
+  train_full,
+  select = -c(diage, patient_ID, any_neuro_deficits)
+)
+
+rf_train_unbalanced$age <- as.numeric(as.character(rf_train_unbalanced$age))
+
+# XGBoost / LASSO training data from unbalanced train_full
+train_xgb_unbalanced <- train_full
+
+train_xgb_unbalanced$bppv <- ifelse(train_xgb_unbalanced$bppv == "yes", 1, 0)
+train_xgb_unbalanced$single <- ifelse(train_xgb_unbalanced$single == "yes", 1, 0)
+train_xgb_unbalanced$multiple <- ifelse(train_xgb_unbalanced$multiple == "yes", 1, 0)
+train_xgb_unbalanced$dysphagia <- ifelse(train_xgb_unbalanced$dysphagia == "yes", 1, 0)
+train_xgb_unbalanced$diplopia <- ifelse(train_xgb_unbalanced$diplopia == "yes", 1, 0)
+train_xgb_unbalanced$diabetes <- ifelse(train_xgb_unbalanced$diabetes == "yes", 1, 0)
+train_xgb_unbalanced$atrial_fibrillation <- ifelse(train_xgb_unbalanced$atrial_fibrillation == "y", 1, 0)
+train_xgb_unbalanced$motor <- ifelse(train_xgb_unbalanced$motor == "yes", 1, 0)
+train_xgb_unbalanced$objective_sensory <- ifelse(train_xgb_unbalanced$objective_sensory == "yes", 1, 0)
+train_xgb_unbalanced$ataxia <- ifelse(train_xgb_unbalanced$ataxia == "yes", 1, 0)
+train_xgb_unbalanced$dysarthria <- ifelse(train_xgb_unbalanced$dysarthria == "yes", 1, 0)
+train_xgb_unbalanced$dysmetria <- ifelse(train_xgb_unbalanced$dysmetria == "yes", 1, 0)
+train_xgb_unbalanced$sexeM <- ifelse(train_xgb_unbalanced$sexe == "M", 1, 0)
+train_xgb_unbalanced$pre_tia2 <- ifelse(train_xgb_unbalanced$pre_tia2 == "y", 1, 0)
+train_xgb_unbalanced$hypert <- as.numeric(train_xgb_unbalanced$hypert) - 1
+train_xgb_unbalanced$previous_stroke <- ifelse(train_xgb_unbalanced$previous_stroke == "yes", 1, 0)
+train_xgb_unbalanced$outcome_xgb <- ifelse(train_xgb_unbalanced$outcome == "yes", 1, 0)
+train_xgb_unbalanced$age <- as.numeric(as.character(train_xgb_unbalanced$age))
+
+train_xgb_unbalanced <- subset(
+  train_xgb_unbalanced,
+  select = -c(patient_ID, any_neuro_deficits, diage, sexe, outcome)
+)
+
+train_xgb_unbalanced2 <- subset(train_xgb_unbalanced, select = -outcome_xgb)
+
+colnames(train_xgb_unbalanced2) <- c(
+  "BPPV", "Single episode", "Multiple episodes", "Dysphagia",
+  "Diplopia", "Diabetes", "Atrial fibrillation", "Previous stroke",
+  "Motor deficits", "Objective sensory deficits", "Ataxia",
+  "Dysarthria", "Dysmetria", "Age", "Previous TIA",
+  "Hypertension", "Sex"
+)
+
+dt_train_unbalanced <- data.matrix(train_xgb_unbalanced2)
+xgbmatrix_train_unbalanced <- xgb.DMatrix(
+  data = dt_train_unbalanced,
+  label = train_xgb_unbalanced$outcome_xgb
+)
+
+# Decision tree unbalanced training data
+tree_train_unbalanced <- as.data.frame(dt_train_unbalanced)
+
+tree_train_unbalanced$BPPV <- as.factor(tree_train_unbalanced$BPPV)
+tree_train_unbalanced$`Single episode` <- as.factor(tree_train_unbalanced$`Single episode`)
+tree_train_unbalanced$`Multiple episodes` <- as.factor(tree_train_unbalanced$`Multiple episodes`)
+tree_train_unbalanced$Dysphagia <- as.factor(tree_train_unbalanced$Dysphagia)
+tree_train_unbalanced$Diplopia <- as.factor(tree_train_unbalanced$Diplopia)
+tree_train_unbalanced$Diabetes <- as.factor(tree_train_unbalanced$Diabetes)
+tree_train_unbalanced$`Atrial fibrillation` <- as.factor(tree_train_unbalanced$`Atrial fibrillation`)
+tree_train_unbalanced$`Previous stroke` <- as.factor(tree_train_unbalanced$`Previous stroke`)
+tree_train_unbalanced$`Motor deficits` <- as.factor(tree_train_unbalanced$`Motor deficits`)
+tree_train_unbalanced$`Objective sensory deficits` <- as.factor(tree_train_unbalanced$`Objective sensory deficits`)
+tree_train_unbalanced$Ataxia <- as.factor(tree_train_unbalanced$Ataxia)
+tree_train_unbalanced$Dysarthria <- as.factor(tree_train_unbalanced$Dysarthria)
+tree_train_unbalanced$Dysmetria <- as.factor(tree_train_unbalanced$Dysmetria)
+tree_train_unbalanced$`Previous TIA` <- as.factor(tree_train_unbalanced$`Previous TIA`)
+tree_train_unbalanced$Hypertension <- as.factor(tree_train_unbalanced$Hypertension)
+tree_train_unbalanced$Sex <- as.factor(tree_train_unbalanced$Sex)
+
+tree_train_unbalanced <- tree_train_unbalanced %>%
+  dplyr::rename(
+    Single_episode = `Single episode`,
+    Multiple_episode = `Multiple episodes`,
+    Atrial_fibrillation = `Atrial fibrillation`,
+    Previous_stroke = `Previous stroke`,
+    Previous_tia = `Previous TIA`,
+    motor = `Motor deficits`,
+    objective = `Objective sensory deficits`
+  )
+
+tree_train_unbalanced$outcome <- as.factor(train_xgb_unbalanced$outcome_xgb)
+levels(tree_train_unbalanced$outcome) <- c("Class0", "Class1")
+
+# ============================================================
+# 2. Generate training and test probabilities for each model
+# ============================================================
+
+# Observed outcomes
+train_obs_binary <- ifelse(train_full$outcome == "yes", 1, 0)
+test_obs_binary <- ifelse(test_60$outcome == "yes", 1, 0)
+
+# Random Forest
+rf_train_probs <- predict(rf_riskscore, newdata = rf_train_unbalanced, type = "prob")[, "yes"]
+rf_test_probs  <- predict(rf_riskscore, newdata = test_60, type = "prob")[, "yes"]
+
+# XGBoost
+xgb_train_probs <- predict(bst, xgbmatrix_train_unbalanced)
+xgb_test_probs  <- predict(bst, xgbmatrix_test)
+
+# LASSO
+lasso_train_probs <- predict(lasso_model_final, newx = dt_train_unbalanced, type = "response")
+lasso_test_probs  <- predict(lasso_model_final, newx = dt_test, type = "response")
+
+# Decision Tree
+tree_train_probs <- predict(tree_model, newdata = tree_train_unbalanced, type = "prob")[, "Class1"]
+tree_test_probs  <- tree_prob_class1
+
+# ============================================================
+# 3. Fit Platt recalibration and apply to held-out test set
+# ============================================================
+
+rf_recal <- platt_recalibrate(
+  rf_train_probs, train_obs_binary,
+  rf_test_probs, test_obs_binary,
+  "Random Forest"
+)
+
+xgb_recal <- platt_recalibrate(
+  xgb_train_probs, train_obs_binary,
+  xgb_test_probs, test_obs_binary,
+  "XGBoost"
+)
+
+lasso_recal <- platt_recalibrate(
+  lasso_train_probs, train_obs_binary,
+  lasso_test_probs, test_obs_binary,
+  "Logistic Regression with LASSO"
+)
+
+tree_recal <- platt_recalibrate(
+  tree_train_probs, train_obs_binary,
+  tree_test_probs, test_obs_binary,
+  "Decision Tree"
+)
+
+# Combine recalibrated test-set data
+recalibrated_results <- rbind(
+  tree_recal$test_data,
+  lasso_recal$test_data,
+  rf_recal$test_data,
+  xgb_recal$test_data
+)
+
+# ============================================================
+# 4. Brier scores before and after recalibration
+# ============================================================
+
+brier_results <- recalibrated_results %>%
+  group_by(Model) %>%
+  summarise(
+    Brier_original = mean((predicted_original - observed)^2),
+    Brier_recalibrated = mean((predicted_recalibrated - observed)^2),
+    .groups = "drop"
+  )
+
+brier_results
+
+# ============================================================
+# 5. Classification performance after recalibration at 20% cutoff
+# ============================================================
+
+recalibrated_results <- recalibrated_results %>%
+  mutate(
+    class_original = ifelse(predicted_original > 0.20, 1, 0),
+    class_recalibrated = ifelse(predicted_recalibrated > 0.2, 1, 0)
+  )
+
+# Confusion matrices after recalibration
+for (m in unique(recalibrated_results$Model)) {
+  cat("\n\n==============================\n")
+  cat(m, "\n")
+  cat("==============================\n")
+  
+  temp <- recalibrated_results %>% filter(Model == m)
+  
+  print(confusionMatrix(
+    as.factor(temp$class_recalibrated),
+    as.factor(temp$observed),
+    positive = "1"
+  ))
+}
+
+# ============================================================
+# 6. Calibration plot after recalibration
+# ============================================================
+
+recalibration_binned <- recalibrated_results %>%
+  group_by(Model) %>%
+  mutate(bin = ntile(predicted_recalibrated, 10)) %>%
+  group_by(Model, bin) %>%
+  summarise(
+    mean_predicted = mean(predicted_recalibrated),
+    mean_observed = mean(observed),
+    .groups = "drop"
+  )
+
+ggplot(
+  recalibration_binned,
+  aes(x = mean_predicted, y = mean_observed, color = Model)
+) +
+  geom_point(size = 2) +
+  geom_line() +
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    linetype = "dashed",
+    color = "black"
+  ) +
+  labs(
+    x = "Mean Predicted Probability",
+    y = "Mean Observed Frequency"
+  ) +
+  xlim(0, 1) +
+  ylim(0, 1) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black")
+  )
+```
+
+
+```{r}
+# ============================================================
+# PERFORMANCE WITH 95% CIs (THRESHOLDS + AUC + BRIER)
+# Uses recalibrated probabilities for threshold metrics
+# ============================================================
+
+library(dplyr)
+library(pROC)
+library(boot)
+
+thresholds <- c(0.05, 0.10, 0.20)
+
+# Ensure observed is numeric 0/1
+recalibrated_results$observed <- as.numeric(recalibrated_results$observed)
+
+# ------------------------------------------------------------
+# Helper: Brier bootstrap function
+# ------------------------------------------------------------
+
+brier_boot <- function(data, indices, col_pred) {
+  d <- data[indices, ]
+  mean((d[[col_pred]] - d$observed)^2)
+}
+
+# ------------------------------------------------------------
+# Helper: threshold metrics with exact binomial 95% CIs
+# ------------------------------------------------------------
+
+get_metrics_threshold_ci <- function(df, threshold) {
+  
+  pred_class <- ifelse(df$predicted_recalibrated > threshold, 1, 0)
+  obs <- df$observed
+  
+  TP <- sum(pred_class == 1 & obs == 1)
+  FP <- sum(pred_class == 1 & obs == 0)
+  TN <- sum(pred_class == 0 & obs == 0)
+  FN <- sum(pred_class == 0 & obs == 1)
+  
+  sens <- TP / (TP + FN)
+  spec <- TN / (TN + FP)
+  ppv  <- TP / (TP + FP)
+  npv  <- TN / (TN + FN)
+  
+  sens_ci <- binom.test(TP, TP + FN)$conf.int
+  spec_ci <- binom.test(TN, TN + FP)$conf.int
+  ppv_ci  <- binom.test(TP, TP + FP)$conf.int
+  npv_ci  <- binom.test(TN, TN + FN)$conf.int
+  
+  data.frame(
+    Threshold = threshold,
+    
+    TP = TP,
+    FP = FP,
+    TN = TN,
+    FN = FN,
+    
+    Sensitivity = sens,
+    Sens_L = sens_ci[1],
+    Sens_U = sens_ci[2],
+    
+    Specificity = spec,
+    Spec_L = spec_ci[1],
+    Spec_U = spec_ci[2],
+    
+    PPV = ppv,
+    PPV_L = ppv_ci[1],
+    PPV_U = ppv_ci[2],
+    
+    NPV = npv,
+    NPV_L = npv_ci[1],
+    NPV_U = npv_ci[2]
+  )
+}
+
+# ------------------------------------------------------------
+# Threshold-based metrics: 5%, 10%, 20%
+# ------------------------------------------------------------
+
+threshold_results <- recalibrated_results %>%
+  group_by(Model) %>%
+  group_modify(~ {
+    df <- .x
+    do.call(rbind, lapply(thresholds, function(t) {
+      get_metrics_threshold_ci(df, t)
+    }))
+  }) %>%
+  ungroup()
+
+# ------------------------------------------------------------
+# AUC + 95% CI
+# AUC is calculated using original probabilities because
+# recalibration should preserve ranking/discrimination.
+# ------------------------------------------------------------
+
+auc_results <- recalibrated_results %>%
+  group_by(Model) %>%
+  group_modify(~ {
+    
+    roc_obj <- pROC::roc(
+      response = .x$observed,
+      predictor = .x$predicted_original,
+      quiet = TRUE
+    )
+    
+    ci_auc <- pROC::ci.auc(roc_obj)
+    
+    data.frame(
+      AUC = as.numeric(roc_obj$auc),
+      AUC_L = as.numeric(ci_auc[1]),
+      AUC_U = as.numeric(ci_auc[3])
+    )
+  }) %>%
+  ungroup()
+
+# ------------------------------------------------------------
+# Brier scores + bootstrap 95% CIs
+# ------------------------------------------------------------
+
+set.seed(123)
+
+brier_results <- recalibrated_results %>%
+  group_by(Model) %>%
+  group_modify(~ {
+    
+    df <- .x
+    
+    boot_orig <- boot(
+      data = df,
+      statistic = function(d, i) brier_boot(d, i, "predicted_original"),
+      R = 1000
+    )
+    
+    boot_recal <- boot(
+      data = df,
+      statistic = function(d, i) brier_boot(d, i, "predicted_recalibrated"),
+      R = 1000
+    )
+    
+    ci_orig <- boot.ci(boot_orig, type = "perc")$percent[4:5]
+    ci_recal <- boot.ci(boot_recal, type = "perc")$percent[4:5]
+    
+    data.frame(
+      Brier_original = mean((df$predicted_original - df$observed)^2),
+      Brier_orig_L = ci_orig[1],
+      Brier_orig_U = ci_orig[2],
+      
+      Brier_recalibrated = mean((df$predicted_recalibrated - df$observed)^2),
+      Brier_recal_L = ci_recal[1],
+      Brier_recal_U = ci_recal[2]
+    )
+  }) %>%
+  ungroup()
+
+# ------------------------------------------------------------
+# Final unformatted results table
+# ------------------------------------------------------------
+
+final_results_table <- threshold_results %>%
+  left_join(auc_results, by = "Model") %>%
+  left_join(brier_results, by = "Model") %>%
+  arrange(Model, Threshold)
+
+final_results_table
+
+# ------------------------------------------------------------
+# Final formatted manuscript-ready results table
+# ------------------------------------------------------------
+
+format_ci <- function(est, lower, upper, digits = 3) {
+  paste0(
+    round(est, digits),
+    " (",
+    round(lower, digits),
+    "–",
+    round(upper, digits),
+    ")"
+  )
+}
+
+final_results_table_formatted <- final_results_table %>%
+  mutate(
+    Threshold = paste0(Threshold * 100, "%"),
+    Sensitivity = format_ci(Sensitivity, Sens_L, Sens_U),
+    Specificity = format_ci(Specificity, Spec_L, Spec_U),
+    PPV = format_ci(PPV, PPV_L, PPV_U),
+    NPV = format_ci(NPV, NPV_L, NPV_U),
+    AUC = format_ci(AUC, AUC_L, AUC_U),
+    Brier_original = format_ci(Brier_original, Brier_orig_L, Brier_orig_U),
+    Brier_recalibrated = format_ci(Brier_recalibrated, Brier_recal_L, Brier_recal_U)
+  ) %>%
+  select(
+    Model,
+    Threshold,
+    TP, FP, TN, FN,
+    Sensitivity,
+    Specificity,
+    PPV,
+    NPV,
+    AUC,
+    Brier_original,
+    Brier_recalibrated
+  )
+
+final_results_table_formatted
+```
+
+
+```{r}
+tree_class<-ifelse(tree_recal$test_data$predicted_recalibrated>0.05,1,0)
+table(tree_class)
+table(test_60_$ct_performed)
+table(test_60_$referred)
+
+lasso_class<-ifelse(lasso_recal$test_data$predicted_recalibrated>0.05,1,0)
+table(lasso_class)
+
+rf_class<-ifelse(rf_recal$test_data$predicted_recalibrated>0.05,1,0)
+table(rf_class)
+
+xgb_class<-ifelse(xgb_recal$test_data$predicted_recalibrated>0.05,1,0)
+table(xgb_class)
+```
